@@ -10,6 +10,39 @@ from pyrogram.types import Message
 from info import CHNL_LNK
 from yt_dlp import YoutubeDL
 
+# ─── Cookies Setup ───────────────────────────────────────────────
+# Priority 1: cookies.txt file (root folder mein)
+# Priority 2: COOKIES_CONTENT environment variable (Render/Heroku)
+
+COOKIES_FILE = None
+
+if os.path.exists("cookies.txt"):
+    COOKIES_FILE = "cookies.txt"
+elif os.environ.get("COOKIES_CONTENT"):
+    # Environment variable se cookies.txt banao
+    with open("cookies.txt", "w") as f:
+        f.write(os.environ.get("COOKIES_CONTENT"))
+    COOKIES_FILE = "cookies.txt"
+# ─────────────────────────────────────────────────────────────────
+COOKIES_FILE = "cookies.txt" if os.path.exists("cookies.txt") else None
+
+def get_ydl_opts(extra={}):
+    """Base yt-dlp options with cookies if available"""
+    opts = {
+        "quiet": True,
+        "noplaylist": True,
+        "geo_bypass": True,
+        "nocheckcertificate": True,
+        "http_headers": {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+        },
+    }
+    if COOKIES_FILE:
+        opts["cookiefile"] = COOKIES_FILE
+    opts.update(extra)
+    return opts
+
+
 def get_text(message: Message):
     text_to_return = message.text
     if message.text is None:
@@ -26,45 +59,30 @@ def get_text(message: Message):
 async def song(client, message):
     user_id = message.from_user.id
     user_name = message.from_user.first_name
-    rpk = "[" + user_name + "](tg://user?id=" + str(user_id) + ")"
-    query = ''
-    for i in message.command[1:]:
-        query += ' ' + str(i)
-    query = query.strip()
+    query = ' '.join(message.command[1:]).strip()
     if not query:
         return await message.reply("**Example: /song Tum Hi Ho**")
 
     m = await message.reply(f"**🔍 Searching: {query}**")
-
-    ydl_opts = {
-        "format": "bestaudio[ext=m4a]/bestaudio/best",
-        "outtmpl": "%(id)s.%(ext)s",
-        "quiet": True,
-        "noplaylist": True,
-        "geo_bypass": True,
-        "nocheckcertificate": True,
-    }
+    audio_file = None
+    thumb_name = None
 
     try:
-        # Search on YouTube
-        search_opts = {
-            "quiet": True,
-            "extract_flat": True,
-            "default_search": f"ytsearch1:{query}",
-        }
+        # Search
+        search_opts = get_ydl_opts({"extract_flat": True})
         with YoutubeDL(search_opts) as ydl:
             info = ydl.extract_info(f"ytsearch1:{query}", download=False)
             if not info or 'entries' not in info or not info['entries']:
                 return await m.edit("**❌ No results found. Try another song name.**")
             entry = info['entries'][0]
-            link = entry.get('url') or f"https://youtube.com/watch?v={entry['id']}"
+            link = f"https://youtube.com/watch?v={entry['id']}"
             title = entry.get('title', 'Unknown')[:40]
             duration = entry.get('duration', 0)
             video_id = entry.get('id', '')
 
         await m.edit("**⬇️ Downloading your song...**")
 
-        # Download thumbnail
+        # Thumbnail
         thumb_name = f"thumb_{video_id}.jpg"
         try:
             thumb_url = f"https://img.youtube.com/vi/{video_id}/hqdefault.jpg"
@@ -75,7 +93,11 @@ async def song(client, message):
             thumb_name = None
 
         # Download audio
-        with YoutubeDL(ydl_opts) as ydl:
+        audio_opts = get_ydl_opts({
+            "format": "bestaudio[ext=m4a]/bestaudio/best",
+            "outtmpl": "%(id)s.%(ext)s",
+        })
+        with YoutubeDL(audio_opts) as ydl:
             info_dict = ydl.extract_info(link, download=True)
             audio_file = ydl.prepare_filename(info_dict)
 
@@ -92,11 +114,15 @@ async def song(client, message):
         await m.delete()
 
     except Exception as e:
-        await m.edit(f"**🚫 Error: {str(e)[:200]}**")
+        err = str(e)
+        if "Sign in" in err or "bot" in err.lower() or "429" in err:
+            await m.edit("**❌ YouTube ne block kiya.\n\n`cookies.txt` file bot root mein rakho phir try karo.**")
+        else:
+            await m.edit(f"**🚫 Error:** `{err[:200]}`")
         print(e)
 
     finally:
-        for f in [audio_file if 'audio_file' in locals() else None, thumb_name]:
+        for f in [audio_file, thumb_name]:
             try:
                 if f and os.path.exists(f):
                     os.remove(f)
@@ -107,17 +133,16 @@ async def song(client, message):
 @Client.on_message(filters.command(["video", "mp4"]))
 async def vsong(client, message: Message):
     urlissed = get_text(message)
-    pablo = await client.send_message(message.chat.id, f"**🔍 Finding your video:** `{urlissed}`")
+    pablo = await client.send_message(message.chat.id, f"**🔍 Finding:** `{urlissed}`")
     if not urlissed:
-        return await pablo.edit("**Example: /video Tum Hi Ho song** or **/video https://youtu.be/xxxxx**")
+        return await pablo.edit("**Example: /video Tum Hi Ho** ya **/video https://youtu.be/xxxxx**")
 
-    # Check if direct URL or search query
+    # Direct URL ya search
     if urlissed.startswith("http"):
         url = urlissed
     else:
-        # Search for video
         try:
-            search_opts = {"quiet": True, "extract_flat": True}
+            search_opts = get_ydl_opts({"extract_flat": True})
             with YoutubeDL(search_opts) as ydl:
                 info = ydl.extract_info(f"ytsearch1:{urlissed}", download=False)
                 if not info or 'entries' not in info or not info['entries']:
@@ -127,29 +152,27 @@ async def vsong(client, message: Message):
         except Exception as e:
             return await pablo.edit(f"**❌ Search failed:** `{str(e)[:200]}`")
 
-    opts = {
+    video_opts = get_ydl_opts({
         "format": "best[ext=mp4]/best",
         "addmetadata": True,
-        "geo_bypass": True,
-        "nocheckcertificate": True,
         "outtmpl": "%(id)s.mp4",
-        "quiet": True,
-        "noplaylist": True,
-    }
+    })
 
     await pablo.edit("**⬇️ Downloading video...**")
 
     try:
-        with YoutubeDL(opts) as ytdl:
+        with YoutubeDL(video_opts) as ytdl:
             ytdl_data = ytdl.extract_info(url, download=True)
     except Exception as e:
-        return await pablo.edit(f"**❌ Download Failed:** `{str(e)[:200]}`")
+        err = str(e)
+        if "Sign in" in err or "bot" in err.lower() or "429" in err:
+            return await pablo.edit("**❌ YouTube ne block kiya.\n\n`cookies.txt` file bot root mein rakho phir try karo.**")
+        return await pablo.edit(f"**❌ Download Failed:** `{err[:200]}`")
 
     file_stark = f"{ytdl_data['id']}.mp4"
     thum = ytdl_data.get('title', 'Video')
-    mo = url
 
-    # Download thumbnail
+    # Thumbnail
     sedlyf = None
     try:
         kekme = f"https://img.youtube.com/vi/{ytdl_data['id']}/hqdefault.jpg"
@@ -160,7 +183,7 @@ async def vsong(client, message: Message):
     except:
         sedlyf = None
 
-    capy = f"**𝚃𝙸𝚃𝙻𝙴 :** [{thum}]({mo})\n**𝚁𝙴𝚀𝚄𝙴𝚂𝚃𝙴𝙳 𝙱𝚈 :** {message.from_user.mention}"
+    capy = f"**𝚃𝙸𝚃𝙻𝙴 :** [{thum}]({url})\n**𝚁𝙴𝚀𝚄𝙴𝚂𝚃𝙴𝙳 𝙱𝚈 :** {message.from_user.mention}"
 
     await pablo.edit("**📤 Uploading...**")
 
