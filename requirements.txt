@@ -5,8 +5,7 @@ bs4
 shortzy
 pytz
 aiohttp
-yt-dlp
-youtube-dl
+yt-dlp>=2024.11.18
 ytthumb
 jinja2
 apscheduler
@@ -20,7 +19,7 @@ aiofiles
 hachoir
 python-decouple
 ffmpeg-python>=0.2.0
-youtube_search
+youtube-search-python==1.6.6
 pymongo[srv]==3.12.3
 motor==2.5.1
 marshmallow==3.14.1
